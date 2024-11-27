@@ -99,10 +99,8 @@ class Input : public Control {
 
   bool render() override {
     ImGui::SetCursorPos({position[0], position[1]});
-    char buf[256];
-    strncpy(buf, value.c_str(), 256);
-    if (ImGui::InputText(name.c_str(), buf, sizeof(buf))) {
-      value = buf;
+    value.resize(4096);
+    if (ImGui::InputText(name.c_str(), const_cast<char*>(value.c_str()), value.size())) {
       dispatch({EventType::ValueChanged, this});
     }
   }

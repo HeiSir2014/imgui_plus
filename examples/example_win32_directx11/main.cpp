@@ -9,6 +9,7 @@
 #include "imgui.h"
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
+#include "plus/imgui_plus.h"
 #include <d3d11.h>
 #include <tchar.h>
 
@@ -84,6 +85,12 @@ int main(int, char**)
     bool show_another_window = false;
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
+    auto btn = std::make_shared<ImGuiPlus::Button>("hello plus | 你好，ImguiPlus");
+    btn->setPosition(200, 100);
+    btn->setSize(100, 50);
+    btn->addEventListener(ImGuiPlus::EventType::Click, [](const ImGuiPlus::Event& e){
+        MessageBoxA(0,"click","tip",MB_OK | MB_ICONINFORMATION);
+    });
     // Main loop
     bool done = false;
     while (!done)
@@ -133,6 +140,8 @@ int main(int, char**)
             static int counter = 0;
 
             ImGui::Begin("Hello, world!");                          // Create a window called "Hello, world!" and append into it.
+
+            btn->render();
 
             ImGui::Text("This is some useful text.");               // Display some text (you can use a format strings too)
             ImGui::Checkbox("Demo Window", &show_demo_window);      // Edit bools storing our window open/close state

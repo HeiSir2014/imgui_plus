@@ -2,8 +2,8 @@
 // This needs to be used along with a Platform Backend (e.g. GLFW, SDL, Win32, custom..)
 
 // Implemented features:
-//  [!] Renderer: User texture binding. Use 'VkDescriptorSet' as ImTextureID. Read the FAQ about ImTextureID! See https://github.com/ocornut/imgui/pull/914 for discussions.
-//  [X] Renderer: Large meshes support (64k+ vertices) with 16-bit indices.
+//  [!] Renderer: User texture binding. Use 'VkDescriptorSet' as ImTextureID. Call ImGui_ImplVulkan_AddTexture() to register one. Read the FAQ about ImTextureID! See https://github.com/ocornut/imgui/pull/914 for discussions.
+//  [X] Renderer: Large meshes support (64k+ vertices) even with 16-bit indices (ImGuiBackendFlags_RendererHasVtxOffset).
 //  [X] Renderer: Expose selected render state for draw callbacks to use. Access in '(ImGui_ImplXXXX_RenderState*)GetPlatformIO().Renderer_RenderState'.
 
 // The aim of imgui_impl_vulkan.h/.cpp is to be usable in your engine without any modification.
@@ -26,6 +26,7 @@
 
 // CHANGELOG
 // (minor and older changes stripped away, please see git history for details)
+//  2024-12-11: Vulkan: Fixed setting VkSwapchainCreateInfoKHR::preTransform for platforms not supporting VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR. (#8222)
 //  2024-11-27: Vulkan: Make user-provided descriptor pool optional. As a convenience, when setting init_info->DescriptorPoolSize the backend will create one itself. (#8172, #4867)
 //  2024-10-07: Vulkan: Changed default texture sampler to Clamp instead of Repeat/Wrap.
 //  2024-10-07: Vulkan: Expose selected render state in ImGui_ImplVulkan_RenderState, which you can access in 'void* platform_io.Renderer_RenderState' during draw callbacks.
@@ -601,14 +602,8 @@ void ImGui_ImplVulkan_RenderDrawData(ImDrawData* draw_data, VkCommandBuffer comm
                 vkCmdSetScissor(command_buffer, 0, 1, &scissor);
 
                 // Bind DescriptorSet with font or user texture
-                VkDescriptorSet desc_set[1] = { (VkDescriptorSet)pcmd->GetTexID() };
-                if (sizeof(ImTextureID) < sizeof(ImU64))
-                {
-                    // We don't support texture switches if ImTextureID hasn't been redefined to be 64-bit. Do a flaky check that other textures haven't been used.
-                    IM_ASSERT(pcmd->GetTexID() == (ImTextureID)bd->FontTexture.DescriptorSet);
-                    desc_set[0] = bd->FontTexture.DescriptorSet;
-                }
-                vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, bd->PipelineLayout, 0, 1, desc_set, 0, nullptr);
+                VkDescriptorSet desc_set = (VkDescriptorSet)pcmd->GetTexID();
+                vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, bd->PipelineLayout, 0, 1, &desc_set, 0, nullptr);
 
                 // Draw
                 vkCmdDrawIndexed(command_buffer, pcmd->ElemCount, 1, pcmd->IdxOffset + global_idx_offset, pcmd->VtxOffset + global_vtx_offset, 0);
@@ -617,7 +612,7 @@ void ImGui_ImplVulkan_RenderDrawData(ImDrawData* draw_data, VkCommandBuffer comm
         global_idx_offset += draw_list->IdxBuffer.Size;
         global_vtx_offset += draw_list->VtxBuffer.Size;
     }
-    platform_io.Renderer_RenderState = NULL;
+    platform_io.Renderer_RenderState = nullptr;
 
     // Note: at this point both vkCmdSetViewport() and vkCmdSetScissor() have been called.
     // Our last values will leak into user/application rendering IF:
@@ -975,7 +970,7 @@ static void ImGui_ImplVulkan_CreatePipeline(VkDevice device, const VkAllocationC
     if (bd->VulkanInitInfo.UseDynamicRendering)
     {
         IM_ASSERT(bd->VulkanInitInfo.PipelineRenderingCreateInfo.sType == VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR && "PipelineRenderingCreateInfo sType must be VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR");
-        IM_ASSERT(bd->VulkanInitInfo.PipelineRenderingCreateInfo.pNext == nullptr && "PipelineRenderingCreateInfo pNext must be NULL");
+        IM_ASSERT(bd->VulkanInitInfo.PipelineRenderingCreateInfo.pNext == nullptr && "PipelineRenderingCreateInfo pNext must be nullptr");
         info.pNext = &bd->VulkanInitInfo.PipelineRenderingCreateInfo;
         info.renderPass = VK_NULL_HANDLE; // Just make sure it's actually nullptr.
     }
@@ -1432,6 +1427,10 @@ void ImGui_ImplVulkanH_CreateWindowSwapChain(VkPhysicalDevice physical_device, V
 
     // Create Swapchain
     {
+        VkSurfaceCapabilitiesKHR cap;
+        err = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, wd->Surface, &cap);
+        check_vk_result(err);
+
         VkSwapchainCreateInfoKHR info = {};
         info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
         info.surface = wd->Surface;
@@ -1441,19 +1440,15 @@ void ImGui_ImplVulkanH_CreateWindowSwapChain(VkPhysicalDevice physical_device, V
         info.imageArrayLayers = 1;
         info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;           // Assume that graphics family == present family
-        info.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+        info.preTransform = (cap.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR : cap.currentTransform;
         info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
         info.presentMode = wd->PresentMode;
         info.clipped = VK_TRUE;
         info.oldSwapchain = old_swapchain;
-        VkSurfaceCapabilitiesKHR cap;
-        err = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, wd->Surface, &cap);
-        check_vk_result(err);
         if (info.minImageCount < cap.minImageCount)
             info.minImageCount = cap.minImageCount;
         else if (cap.maxImageCount != 0 && info.minImageCount > cap.maxImageCount)
             info.minImageCount = cap.maxImageCount;
-
         if (cap.currentExtent.width == 0xffffffff)
         {
             info.imageExtent.width = wd->Width = w;

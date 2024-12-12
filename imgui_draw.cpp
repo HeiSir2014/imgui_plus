@@ -1,4 +1,4 @@
-// dear imgui, v1.91.6 WIP
+// dear imgui, v1.91.7 WIP
 // (drawing and font code)
 
 /*
@@ -396,7 +396,7 @@ void ImDrawListSharedData::SetCircleTessellationMaxError(float max_error)
 
 ImDrawList::ImDrawList(ImDrawListSharedData* shared_data)
 {
-    memset(this, 0, sizeof(*this)); 
+    memset(this, 0, sizeof(*this));
     _Data = shared_data;
 }
 
@@ -2377,7 +2377,7 @@ ImFontConfig::ImFontConfig()
     GlyphMaxAdvanceX = FLT_MAX;
     RasterizerMultiply = 1.0f;
     RasterizerDensity = 1.0f;
-    EllipsisChar = (ImWchar)-1;
+    EllipsisChar = 0;
 }
 
 //-----------------------------------------------------------------------------
@@ -2563,9 +2563,6 @@ ImFont* ImFontAtlas::AddFont(const ImFontConfig* font_cfg)
     // - Note that using io.FontGlobalScale or SetWindowFontScale(), with are legacy-ish, partially supported features, can still lead to unrounded sizes.
     // - We may support it better later and remove this rounding.
     new_font_cfg.SizePixels = ImTrunc(new_font_cfg.SizePixels);
-
-    if (new_font_cfg.DstFont->EllipsisChar == (ImWchar)-1)
-        new_font_cfg.DstFont->EllipsisChar = font_cfg->EllipsisChar;
 
     // Pointers to ConfigData and BuilderData are otherwise dangling
     ImFontAtlasUpdateConfigDataPointers(this);
@@ -2941,6 +2938,7 @@ static bool ImFontAtlasBuildWithStbTruetype(ImFontAtlas* atlas)
     int total_surface = 0;
     int buf_rects_out_n = 0;
     int buf_packedchars_out_n = 0;
+    const int pack_padding = atlas->TexGlyphPadding;
     for (int src_i = 0; src_i < src_tmp_array.Size; src_i++)
     {
         ImFontBuildSrcData& src_tmp = src_tmp_array[src_i];
@@ -2964,18 +2962,19 @@ static bool ImFontAtlasBuildWithStbTruetype(ImFontAtlas* atlas)
 
         // Gather the sizes of all rectangles we will need to pack (this loop is based on stbtt_PackFontRangesGatherRects)
         const float scale = (cfg.SizePixels > 0.0f) ? stbtt_ScaleForPixelHeight(&src_tmp.FontInfo, cfg.SizePixels * cfg.RasterizerDensity) : stbtt_ScaleForMappingEmToPixels(&src_tmp.FontInfo, -cfg.SizePixels * cfg.RasterizerDensity);
-        const int padding = atlas->TexGlyphPadding;
         for (int glyph_i = 0; glyph_i < src_tmp.GlyphsList.Size; glyph_i++)
         {
             int x0, y0, x1, y1;
             const int glyph_index_in_font = stbtt_FindGlyphIndex(&src_tmp.FontInfo, src_tmp.GlyphsList[glyph_i]);
             IM_ASSERT(glyph_index_in_font != 0);
             stbtt_GetGlyphBitmapBoxSubpixel(&src_tmp.FontInfo, glyph_index_in_font, scale * cfg.OversampleH, scale * cfg.OversampleV, 0, 0, &x0, &y0, &x1, &y1);
-            src_tmp.Rects[glyph_i].w = (stbrp_coord)(x1 - x0 + padding + cfg.OversampleH - 1);
-            src_tmp.Rects[glyph_i].h = (stbrp_coord)(y1 - y0 + padding + cfg.OversampleV - 1);
+            src_tmp.Rects[glyph_i].w = (stbrp_coord)(x1 - x0 + pack_padding + cfg.OversampleH - 1);
+            src_tmp.Rects[glyph_i].h = (stbrp_coord)(y1 - y0 + pack_padding + cfg.OversampleV - 1);
             total_surface += src_tmp.Rects[glyph_i].w * src_tmp.Rects[glyph_i].h;
         }
     }
+    for (int i = 0; i < atlas->CustomRects.Size; i++)
+        total_surface += (atlas->CustomRects[i].Width + pack_padding) * (atlas->CustomRects[i].Height + pack_padding);
 
     // We need a width for the skyline algorithm, any width!
     // The exact width doesn't really matter much, but some API/GPU have texture size limitations and increasing width can decrease height.
@@ -2991,7 +2990,8 @@ static bool ImFontAtlasBuildWithStbTruetype(ImFontAtlas* atlas)
     // Pack our extra data rectangles first, so it will be on the upper-left corner of our texture (UV will have small values).
     const int TEX_HEIGHT_MAX = 1024 * 32;
     stbtt_pack_context spc = {};
-    stbtt_PackBegin(&spc, NULL, atlas->TexWidth, TEX_HEIGHT_MAX, 0, atlas->TexGlyphPadding, NULL);
+    stbtt_PackBegin(&spc, NULL, atlas->TexWidth, TEX_HEIGHT_MAX, 0, 0, NULL);
+    spc.padding = atlas->TexGlyphPadding; // Because we mixup stbtt_PackXXX and stbrp_PackXXX there's a bit of a hack here, not passing the value to stbtt_PackBegin() allows us to still pack a TexWidth-1 wide item. (#8107)
     ImFontAtlasBuildPackCustomRects(atlas, spc.pack_info);
 
     // 6. Pack each source font. No rendering yet, we are working with rectangles in an infinitely tall texture at this point.
@@ -3137,13 +3137,14 @@ void ImFontAtlasBuildPackCustomRects(ImFontAtlas* atlas, void* stbrp_context_opa
     if (user_rects.Size < 1) { __builtin_unreachable(); } // Workaround for GCC bug if IM_ASSERT() is defined to conditionally throw (see #5343)
 #endif
 
+    const int pack_padding = atlas->TexGlyphPadding;
     ImVector<stbrp_rect> pack_rects;
     pack_rects.resize(user_rects.Size);
     memset(pack_rects.Data, 0, (size_t)pack_rects.size_in_bytes());
     for (int i = 0; i < user_rects.Size; i++)
     {
-        pack_rects[i].w = user_rects[i].Width;
-        pack_rects[i].h = user_rects[i].Height;
+        pack_rects[i].w = user_rects[i].Width + pack_padding;
+        pack_rects[i].h = user_rects[i].Height + pack_padding;
     }
     stbrp_pack_rects(pack_context, &pack_rects[0], pack_rects.Size);
     for (int i = 0; i < pack_rects.Size; i++)
@@ -3151,7 +3152,7 @@ void ImFontAtlasBuildPackCustomRects(ImFontAtlas* atlas, void* stbrp_context_opa
         {
             user_rects[i].X = (unsigned short)pack_rects[i].x;
             user_rects[i].Y = (unsigned short)pack_rects[i].y;
-            IM_ASSERT(pack_rects[i].w == user_rects[i].Width && pack_rects[i].h == user_rects[i].Height);
+            IM_ASSERT(pack_rects[i].w == user_rects[i].Width + pack_padding && pack_rects[i].h == user_rects[i].Height + pack_padding);
             atlas->TexHeight = ImMax(atlas->TexHeight, pack_rects[i].y + pack_rects[i].h);
         }
 }
@@ -3631,8 +3632,8 @@ ImFont::ImFont()
 {
     FontSize = 0.0f;
     FallbackAdvanceX = 0.0f;
-    FallbackChar = (ImWchar)-1;
-    EllipsisChar = (ImWchar)-1;
+    FallbackChar = 0;
+    EllipsisChar = 0;
     EllipsisWidth = EllipsisCharStep = 0.0f;
     EllipsisCharCount = 0;
     FallbackGlyph = NULL;
@@ -3671,7 +3672,7 @@ static ImWchar FindFirstExistingGlyph(ImFont* font, const ImWchar* candidate_cha
     for (int n = 0; n < candidate_chars_count; n++)
         if (font->FindGlyphNoFallback(candidate_chars[n]) != NULL)
             return candidate_chars[n];
-    return (ImWchar)-1;
+    return 0;
 }
 
 void ImFont::BuildLookupTable()
@@ -3738,17 +3739,17 @@ void ImFont::BuildLookupTable()
     // Setup Ellipsis character. It is required for rendering elided text. We prefer using U+2026 (horizontal ellipsis).
     // However some old fonts may contain ellipsis at U+0085. Here we auto-detect most suitable ellipsis character.
     // FIXME: Note that 0x2026 is rarely included in our font ranges. Because of this we are more likely to use three individual dots.
-    const ImWchar ellipsis_chars[] = { (ImWchar)0x2026, (ImWchar)0x0085 };
+    const ImWchar ellipsis_chars[] = { ConfigData->EllipsisChar, (ImWchar)0x2026, (ImWchar)0x0085 };
     const ImWchar dots_chars[] = { (ImWchar)'.', (ImWchar)0xFF0E };
-    if (EllipsisChar == (ImWchar)-1)
+    if (EllipsisChar == 0)
         EllipsisChar = FindFirstExistingGlyph(this, ellipsis_chars, IM_ARRAYSIZE(ellipsis_chars));
     const ImWchar dot_char = FindFirstExistingGlyph(this, dots_chars, IM_ARRAYSIZE(dots_chars));
-    if (EllipsisChar != (ImWchar)-1)
+    if (EllipsisChar != 0)
     {
         EllipsisCharCount = 1;
         EllipsisWidth = EllipsisCharStep = FindGlyph(EllipsisChar)->X1;
     }
-    else if (dot_char != (ImWchar)-1)
+    else if (dot_char != 0)
     {
         const ImFontGlyph* glyph = FindGlyph(dot_char);
         EllipsisChar = dot_char;

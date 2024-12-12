@@ -1,4 +1,4 @@
-// dear imgui, v1.91.6 WIP
+// dear imgui, v1.91.7 WIP
 // (demo code)
 
 // Help:
@@ -1827,6 +1827,16 @@ static void ShowDemoWindowWidgets(ImGuiDemoWindowData* demo_data)
                 my_str.push_back(0);
             Funcs::MyInputTextMultiline("##MyStr", &my_str, ImVec2(-FLT_MIN, ImGui::GetTextLineHeight() * 16));
             ImGui::Text("Data: %p\nSize: %d\nCapacity: %d", (void*)my_str.begin(), my_str.size(), my_str.capacity());
+            ImGui::TreePop();
+        }
+
+        IMGUI_DEMO_MARKER("Widgets/Text Input/Eliding, Alignment");
+        if (ImGui::TreeNode("Eliding, Alignment"))
+        {
+            static char buf1[128] = "/path/to/some/folder/with/long/filename.cpp";
+            static ImGuiInputTextFlags flags = ImGuiInputTextFlags_ElideLeft;
+            ImGui::CheckboxFlags("ImGuiInputTextFlags_ElideLeft", &flags, ImGuiInputTextFlags_ElideLeft);
+            ImGui::InputText("Path", buf1, IM_ARRAYSIZE(buf1), flags);
             ImGui::TreePop();
         }
 
@@ -10175,7 +10185,7 @@ struct ExampleAssetsBrowser
         }
 
         ImGuiIO& io = ImGui::GetIO();
-        ImGui::SetNextWindowContentSize(ImVec2(0.0f, LayoutOuterPadding + LayoutLineCount * (LayoutItemSize.x + LayoutItemSpacing)));
+        ImGui::SetNextWindowContentSize(ImVec2(0.0f, LayoutOuterPadding + LayoutLineCount * (LayoutItemSize.y + LayoutItemSpacing)));
         if (ImGui::BeginChild("Assets", ImVec2(0.0f, -ImGui::GetTextLineHeightWithSpacing()), ImGuiChildFlags_Borders, ImGuiWindowFlags_NoMove))
         {
             ImDrawList* draw_list = ImGui::GetWindowDrawList();
@@ -10387,6 +10397,8 @@ void ImGui::ShowAboutWindow(bool*) {}
 void ImGui::ShowDemoWindow(bool*) {}
 void ImGui::ShowUserGuide() {}
 void ImGui::ShowStyleEditor(ImGuiStyle*) {}
+bool ImGui::ShowStyleSelector(const char* label) { return false; }
+void ImGui::ShowFontSelector(const char* label) {}
 
 #endif
 

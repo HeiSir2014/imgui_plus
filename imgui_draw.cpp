@@ -236,6 +236,7 @@ void ImGui::StyleColorsDark(ImGuiStyle* dst)
     colors[ImGuiCol_TableRowBgAlt]          = ImVec4(1.00f, 1.00f, 1.00f, 0.06f);
     colors[ImGuiCol_TextLink]               = colors[ImGuiCol_HeaderActive];
     colors[ImGuiCol_TextSelectedBg]         = ImVec4(0.26f, 0.59f, 0.98f, 0.35f);
+    colors[ImGuiCol_TreeLines]              = colors[ImGuiCol_Border];
     colors[ImGuiCol_DragDropTarget]         = ImVec4(1.00f, 1.00f, 0.00f, 0.90f);
     colors[ImGuiCol_NavCursor]              = ImVec4(0.26f, 0.59f, 0.98f, 1.00f);
     colors[ImGuiCol_NavWindowingHighlight]  = ImVec4(1.00f, 1.00f, 1.00f, 0.70f);
@@ -300,6 +301,7 @@ void ImGui::StyleColorsClassic(ImGuiStyle* dst)
     colors[ImGuiCol_TableRowBgAlt]          = ImVec4(1.00f, 1.00f, 1.00f, 0.07f);
     colors[ImGuiCol_TextLink]               = colors[ImGuiCol_HeaderActive];
     colors[ImGuiCol_TextSelectedBg]         = ImVec4(0.00f, 0.00f, 1.00f, 0.35f);
+    colors[ImGuiCol_TreeLines]              = colors[ImGuiCol_Border];
     colors[ImGuiCol_DragDropTarget]         = ImVec4(1.00f, 1.00f, 0.00f, 0.90f);
     colors[ImGuiCol_NavCursor]              = colors[ImGuiCol_HeaderHovered];
     colors[ImGuiCol_NavWindowingHighlight]  = ImVec4(1.00f, 1.00f, 1.00f, 0.70f);
@@ -365,6 +367,7 @@ void ImGui::StyleColorsLight(ImGuiStyle* dst)
     colors[ImGuiCol_TableRowBgAlt]          = ImVec4(0.30f, 0.30f, 0.30f, 0.09f);
     colors[ImGuiCol_TextLink]               = colors[ImGuiCol_HeaderActive];
     colors[ImGuiCol_TextSelectedBg]         = ImVec4(0.26f, 0.59f, 0.98f, 0.35f);
+    colors[ImGuiCol_TreeLines]              = colors[ImGuiCol_Border];
     colors[ImGuiCol_DragDropTarget]         = ImVec4(0.26f, 0.59f, 0.98f, 0.95f);
     colors[ImGuiCol_NavCursor]              = colors[ImGuiCol_HeaderHovered];
     colors[ImGuiCol_NavWindowingHighlight]  = ImVec4(0.70f, 0.70f, 0.70f, 0.70f);
@@ -4009,7 +4012,7 @@ const char* ImFont::CalcWordWrapPositionA(float scale, const char* text, const c
             }
 
             // Allow wrapping after punctuation.
-            inside_word = (c != '.' && c != ',' && c != ';' && c != '!' && c != '?' && c != '\"');
+            inside_word = (c != '.' && c != ',' && c != ';' && c != '!' && c != '?' && c != '\"' && c != 0x3001 && c != 0x3002);
         }
 
         // We ignore blank width at the end of the line (they can be skipped)
@@ -4027,7 +4030,7 @@ const char* ImFont::CalcWordWrapPositionA(float scale, const char* text, const c
     // Wrap_width is too small to fit anything. Force displaying 1 character to minimize the height discontinuity.
     // +1 may not be a character start point in UTF-8 but it's ok because caller loops use (text >= word_wrap_eol).
     if (s == text && text < text_end)
-        return s + 1;
+        return s + ImTextCountUtf8BytesFromChar(s, text_end);
     return s;
 }
 
@@ -4110,7 +4113,7 @@ ImVec2 ImFont::CalcTextSizeA(float size, float max_width, float wrap_width, cons
 }
 
 // Note: as with every ImDrawList drawing function, this expects that the font atlas texture is bound.
-void ImFont::RenderChar(ImDrawList* draw_list, float size, const ImVec2& pos, ImU32 col, ImWchar c)
+void ImFont::RenderChar(ImDrawList* draw_list, float size, const ImVec2& pos, ImU32 col, ImWchar c, const ImVec4* cpu_fine_clip)
 {
     const ImFontGlyph* glyph = FindGlyph(c);
     if (!glyph || !glyph->Visible)
@@ -4120,8 +4123,31 @@ void ImFont::RenderChar(ImDrawList* draw_list, float size, const ImVec2& pos, Im
     float scale = (size >= 0.0f) ? (size / FontSize) : 1.0f;
     float x = IM_TRUNC(pos.x);
     float y = IM_TRUNC(pos.y);
+
+    float x1 = x + glyph->X0 * scale;
+    float x2 = x + glyph->X1 * scale;
+    if (cpu_fine_clip && (x1 > cpu_fine_clip->z || x2 < cpu_fine_clip->x))
+        return;
+    float y1 = y + glyph->Y0 * scale;
+    float y2 = y + glyph->Y1 * scale;
+    float u1 = glyph->U0;
+    float v1 = glyph->V0;
+    float u2 = glyph->U1;
+    float v2 = glyph->V1;
+
+    // Always CPU fine clip. Code extracted from RenderText().
+    // CPU side clipping used to fit text in their frame when the frame is too small. Only does clipping for axis aligned quads.
+    if (cpu_fine_clip != NULL)
+    {
+        if (x1 < cpu_fine_clip->x) { u1 = u1 + (1.0f - (x2 - cpu_fine_clip->x) / (x2 - x1)) * (u2 - u1); x1 = cpu_fine_clip->x; }
+        if (y1 < cpu_fine_clip->y) { v1 = v1 + (1.0f - (y2 - cpu_fine_clip->y) / (y2 - y1)) * (v2 - v1); y1 = cpu_fine_clip->y; }
+        if (x2 > cpu_fine_clip->z) { u2 = u1 + ((cpu_fine_clip->z - x1) / (x2 - x1)) * (u2 - u1); x2 = cpu_fine_clip->z; }
+        if (y2 > cpu_fine_clip->w) { v2 = v1 + ((cpu_fine_clip->w - y1) / (y2 - y1)) * (v2 - v1); y2 = cpu_fine_clip->w; }
+        if (y1 >= y2)
+            return;
+    }
     draw_list->PrimReserve(6, 4);
-    draw_list->PrimRectUV(ImVec2(x + glyph->X0 * scale, y + glyph->Y0 * scale), ImVec2(x + glyph->X1 * scale, y + glyph->Y1 * scale), ImVec2(glyph->U0, glyph->V0), ImVec2(glyph->U1, glyph->V1), col);
+    draw_list->PrimRectUV(ImVec2(x1, y1), ImVec2(x2, y2), ImVec2(u1, v1), ImVec2(u2, v2), col);
 }
 
 // Note: as with every ImDrawList drawing function, this expects that the font atlas texture is bound.
